@@ -21,7 +21,7 @@ from PIL import Image
 import PIL.ImageOps
 from tqdm import tqdm
 
-from model import MSSCL
+from model import SimMF
 from utils.dataloader import get_dataloader_sr
 from utils.metrics import get_MAPE, get_MAE, get_MSE
 from utils.util import print_model_parm_nums, weights_init_normal
@@ -88,11 +88,11 @@ cuda = True if torch.cuda.is_available() else False
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 
 # # # initial model
-model = MSSCL(args)
+model = SimMF(args)
 
 model.apply(weights_init_normal)
 torch.nn.utils.clip_grad_norm(model.parameters(), max_norm=5.0)
-print_model_parm_nums(model, 'MSSCL')
+print_model_parm_nums(model, 'SimMF')
 
 criterion = nn.MSELoss()
 criterion1 = nn.MSELoss()
