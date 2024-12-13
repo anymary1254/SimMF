@@ -228,9 +228,9 @@ class EnhancedFFTBlock(nn.Module):
         out = fused * channel_weights
 
         return out + identity
-class MSSCL(nn.Module):
+class SimMF(nn.Module):
     def __init__(self, args):
-        super(MSSCL, self).__init__()
+        super(SimMF, self).__init__()
         self.ext_flag = args.ext_flag
         self.map_width = args.map_width
         self.map_height = args.map_height
