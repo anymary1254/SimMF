@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 class MapData(data.Dataset):
     def __init__(self, datapath, mode='train', road_mode='no', channel=2):
         # 使用固定路径
-        root_dir = "/root/SFYinzi/MS-SCL-main"
+        root_dir = "/root/SFYinzi/SimMF"
 
         # 构建数据路径
         self.datapath = os.path.join(root_dir, datapath, mode)
