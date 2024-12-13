@@ -22,7 +22,7 @@ from torch import nn, Tensor
 from PIL import Image
 import PIL.ImageOps
 from tqdm import tqdm
-from model import MSSCL
+from model import SimMF
 from utils.dataloader import get_dataloader_sr
 from utils.metrics import NTXentLoss, get_MAPE
 from utils.util import weights_init_normal, print_model_parm_nums
@@ -314,7 +314,7 @@ def main():
                 setattr(exp_args, k, v)
 
             # 创建模型
-            model = MSSCL(exp_args).to(device)
+            model = SimMF(exp_args).to(device)
             model.apply(weights_init_normal)
 
             # 设置优化器和损失函数
