@@ -81,55 +81,134 @@ class MAB(nn.Module):
         D = K * d
         self.K = K
         self.d = d
+
+        # 全连接层
         self.FC_q = FC(input_dims=input_dim, units=D, activations=F.relu)
         self.FC_k = FC(input_dims=input_dim, units=D, activations=F.relu)
         self.FC_v = FC(input_dims=input_dim, units=D, activations=F.relu)
         self.FC = FC(input_dims=D, units=output_dim, activations=F.relu)
 
+        # Layer Normalization
+        self.norm = nn.LayerNorm(D)
+
+        # Dropout
+        self.dropout = nn.Dropout(0.1)
+
     def forward(self, Q, K, batch_size):
+        # 生成查询、键、值
         query = self.FC_q(Q)
         key = self.FC_k(K)
         value = self.FC_v(K)
+
+        # 分割头
         query = torch.cat(torch.split(query, self.K, dim=-1), dim=0)
         key = torch.cat(torch.split(key, self.K, dim=-1), dim=0)
         value = torch.cat(torch.split(value, self.K, dim=-1), dim=0)
 
+        # 计算注意力
         attention = torch.matmul(query, key.transpose(2, 3))
         attention /= (self.d ** 0.5)
         attention = F.softmax(attention, dim=-1)
+
+        # 应用注意力
         result = torch.matmul(attention, value)
 
+        # 合并头
         result = torch.cat(torch.split(result, batch_size, dim=0), dim=-1)
+
+        # 特征转换
         result = self.FC(result)
+
+        # 规范化和dropout
+        result = self.norm(result)
+        result = self.dropout(result)
 
         return result
 
 
-class BottleAttention(nn.Module):
+class EnhancedBottleAttention(nn.Module):
     def __init__(self, K, d, set_dim):
-        super(BottleAttention, self).__init__()
+        super(EnhancedBottleAttention, self).__init__()
         D = K * d
         self.d = d
         self.K = K
         self.set_dim = set_dim
+
+        # 初始化可学习的种子向量，使用kaiming初始化
         self.I = nn.Parameter(torch.Tensor(1, 1, set_dim, D))
-        nn.init.xavier_uniform_(self.I)
+        nn.init.kaiming_normal_(self.I)
+
+        # MAB层
         self.mab0 = MAB(K, d, D, D)
         self.mab1 = MAB(K, d, D, D)
 
+        # 特征增强模块
+        self.feature_enhancement = nn.Sequential(
+            nn.LayerNorm([D]),
+            nn.Linear(D, D),
+            nn.GELU(),
+            nn.Dropout(0.1)
+        )
+
+        # 改进的通道注意力机制
+        self.channel_attention = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(128, 64, 1),
+            nn.GELU(),
+            nn.Conv2d(64, 128, 1),
+            nn.Sigmoid()
+        )
+
+        # 改进的空间注意力
+        self.spatial_attention = nn.Sequential(
+            nn.Conv2d(3, 1, kernel_size=7, padding=3),
+            nn.Sigmoid()
+        )
+
+        # 特征融合层
+        self.feature_fusion = nn.Sequential(
+            nn.Conv2d(128, 128, kernel_size=1),
+            nn.BatchNorm2d(128),
+            nn.GELU()
+        )
+
     def forward(self, X):
         batch_size = X.shape[0]
+
+        # 1. 输入预处理
         X = X.flatten(2)
         X = X.unsqueeze(1).permute(0, 1, 3, 2)
 
+        # 2. 特征增强
+        X = self.feature_enhancement(X)
+
+        # 3. Bottleneck Attention处理
         I = self.I.repeat(X.size(0), 1, 1, 1)
         H = self.mab0(I, X, batch_size)
         result = self.mab1(X, H, batch_size)
 
-        result = result.squeeze(1).permute(0, 2, 1).view(batch_size, 128, 32, -1)
+        # 4. 重塑数据以应用注意力机制
+        spatial_x = result.squeeze(1).permute(0, 2, 1)
+        spatial_x = spatial_x.view(batch_size, 128, 32, -1)
+
+        # 5. 通道注意力
+        channel_attn = self.channel_attention(spatial_x)
+        spatial_x = spatial_x * channel_attn
+
+        # 6. 改进的空间注意力（使用均值、最大值和标准差特征）
+        avg_out = torch.mean(spatial_x, dim=1, keepdim=True)
+        max_out, _ = torch.max(spatial_x, dim=1, keepdim=True)
+        std_out = torch.std(spatial_x, dim=1, keepdim=True)
+        attention_maps = torch.cat([avg_out, max_out, std_out], dim=1)
+        spatial_weights = self.spatial_attention(attention_maps)
+
+        # 7. 应用空间注意力
+        enhanced = spatial_x * spatial_weights
+
+        # 8. 特征融合
+        result = self.feature_fusion(enhanced)
 
         return result
-
 
 class EnhancedFFTBlock(nn.Module):
     def __init__(self, in_features):
@@ -248,25 +327,27 @@ class SimMF(nn.Module):
             self.embed_weather = nn.Embedding(18, 3)  # ignore 0, thus use 18
 
         self.ext2lr2 = nn.Sequential(
-            nn.Linear(2, 128),
-            nn.Dropout(0.3),
-            nn.ReLU(inplace=True),
-            nn.Linear(128, self.map_width * self.map_height),
-            nn.ReLU(inplace=True)
+            nn.Linear(2, 128),  # 第一个全连接层
+            nn.LayerNorm(128),  # 添加LayerNorm
+            nn.ReLU(inplace=True),  # ReLU激活
+            nn.Linear(128, self.map_width * self.map_height),  # 第二个全连接层
+            nn.ReLU(inplace=True)  # ReLU激活
         )
+
         self.ext2lr3 = nn.Sequential(
-            nn.Linear(3, 128),
-            nn.Dropout(0.3),
-            nn.ReLU(inplace=True),
-            nn.Linear(128, self.map_width * self.map_height),
-            nn.ReLU(inplace=True)
+            nn.Linear(3, 128),  # 第一个全连接层
+            nn.LayerNorm(128),  # 添加LayerNorm
+            nn.ReLU(inplace=True),  # ReLU激活
+            nn.Linear(128, self.map_width * self.map_height),  # 第二个全连接层
+            nn.ReLU(inplace=True)  # ReLU激活
         )
+
         self.ext2lr4 = nn.Sequential(
-            nn.Linear(4, 128),
-            nn.Dropout(0.3),
-            nn.ReLU(inplace=True),
-            nn.Linear(128, self.map_width * self.map_height),
-            nn.ReLU(inplace=True)
+            nn.Linear(4, 128),  # 第一个全连接层
+            nn.LayerNorm(128),  # 添加LayerNorm
+            nn.ReLU(inplace=True),  # ReLU激活
+            nn.Linear(128, self.map_width * self.map_height),  # 第二个全连接层
+            nn.ReLU(inplace=True)  # ReLU激活
         )
 
         if self.ext_flag:
@@ -291,7 +372,7 @@ class SimMF(nn.Module):
 
         long_trans = []
         for _ in range(args.attnum):
-            long_trans.append(BottleAttention(16, 8, args.point))
+            long_trans.append(EnhancedBottleAttention(16, 8, args.point))
         self.long_trans = nn.Sequential(*long_trans)
 
         # final conv
@@ -299,7 +380,7 @@ class SimMF(nn.Module):
 
         self.conv_trans = nn.Sequential(
             nn.Conv2d(args.base_channels, args.base_channels, 3, 1, 1),
-            nn.BatchNorm2d(args.base_channels),
+            nn.LayerNorm([args.base_channels, args.map_height, args.map_width]),  # 修改为map_height和map_width
             nn.ReLU(inplace=True))
         self.loss = NTXentLoss(0.05, True)
 
